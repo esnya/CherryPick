@@ -1,6 +1,7 @@
 using FrooxEngine;
 using Elements.Core;
 using FrooxEngine.UIX;
+using System.Reflection;
 using static CherryPick.CherryPick;
 
 namespace CherryPick;
@@ -17,6 +18,25 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
     public static WorkerDetails[] Workers => _allWorkers;
     private readonly SortedList<float, WorkerDetails> _results = new(new MatchRatioComparer()); // Not queryable by index due to the implementation of MatchRatioComparer
     private static readonly WorkerDetails[] _allWorkers = [];
+    private static readonly Lazy<Type[]> _genericArgumentTypes = new(BuildGenericArgumentTypes);
+    private static readonly (string Name, Type Type)[] _knownGenericArgumentAliases =
+    [
+        ("bool", typeof(bool)),
+        ("byte", typeof(byte)),
+        ("sbyte", typeof(sbyte)),
+        ("short", typeof(short)),
+        ("ushort", typeof(ushort)),
+        ("int", typeof(int)),
+        ("uint", typeof(uint)),
+        ("long", typeof(long)),
+        ("ulong", typeof(ulong)),
+        ("float", typeof(float)),
+        ("double", typeof(double)),
+        ("decimal", typeof(decimal)),
+        ("char", typeof(char)),
+        ("string", typeof(string)),
+        ("Uri", typeof(Uri))
+    ];
 
 
 
@@ -201,7 +221,6 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
 
         int genericStart = txt.IndexOf('<');
         int genericEnd = txt.LastIndexOf('>');
-        int diff = (genericEnd - genericStart) - 1;
         string? matchTxt = null;
         string? genericType = null;
 
@@ -209,8 +228,10 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
         {
             matchTxt = txt.Substring(0, genericStart);
 
-            if (genericEnd > 0 && diff > 0)
-                genericType = txt.Substring(genericStart + 1, diff);
+            if (genericEnd > genericStart)
+                genericType = txt.Substring(genericStart + 1, genericEnd - genericStart - 1);
+            else if (genericStart < txt.Length - 1)
+                genericType = txt.Substring(genericStart + 1);
         }
         else
         {
@@ -237,18 +258,11 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
 
             if (!string.IsNullOrEmpty(genericType))
             {
-                Type? genParam = searchRoot.World.Types.ParseNiceType(genericType, true);
+                Type? genParam = ResolveGenericArgument(genericType);
                 if (genParam is null)
                     goto PARSE_TYPES;
 
-                Type? constructed = firstGeneric.Type.MakeGenericType(genParam);
-
-                if (constructed is null)
-                    goto PARSE_TYPES;
-
-                bool isValid = (bool?)constructed.GetProperty("IsValidGenericType")?.GetValue(null) ?? true;
-
-                if (!isValid)
+                if (!TryConstructGeneric(firstGeneric.Type, genParam, out Type? constructed) || constructed is null)
                     goto PARSE_TYPES;
 
                 try
@@ -307,6 +321,156 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
             j++;
         }
     }
+
+
+
+    #endregion
+
+
+
+    #region Generic argument matching
+
+
+
+    private Type? ResolveGenericArgument(string genericType)
+    {
+        Type? exact = TryParseNiceType(genericType);
+        if (exact is not null)
+            return exact;
+
+        string trimmed = genericType.Trim();
+        if (string.IsNullOrEmpty(trimmed))
+            return null;
+
+        Type? aliasMatch = FindKnownGenericArgumentAlias(trimmed);
+        if (aliasMatch is not null)
+            return aliasMatch;
+
+        return _genericArgumentTypes.Value
+            .Select(t => new { Type = t, Rank = GetGenericArgumentMatchRank(t, trimmed) })
+            .Where(t => t.Rank >= 0)
+            .OrderBy(t => t.Rank)
+            .ThenBy(t => t.Type.GetNiceName().Length)
+            .ThenBy(t => t.Type.GetNiceName(), StringComparer.OrdinalIgnoreCase)
+            .Select(t => t.Type)
+            .FirstOrDefault();
+    }
+
+
+
+    private static Type? FindKnownGenericArgumentAlias(string query)
+    {
+        return _knownGenericArgumentAliases
+            .Where(alias => alias.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(alias => alias.Name.Equals(query, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(alias => alias.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(alias => alias.Name.Length)
+            .Select(alias => alias.Type)
+            .FirstOrDefault();
+    }
+
+
+
+    private Type? TryParseNiceType(string genericType)
+    {
+        try
+        {
+            return searchRoot.World.Types.ParseNiceType(genericType, true);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+
+
+    private static bool TryConstructGeneric(Type genericDefinition, Type genericArgument, out Type? constructed)
+    {
+        constructed = null;
+        try
+        {
+            Type type = genericDefinition.MakeGenericType(genericArgument);
+            if ((bool?)type.GetProperty("IsValidGenericType", BindingFlags.Static | BindingFlags.Public)?.GetValue(null) == false ||
+                !type.IsValidGenericType(validForInstantiation: true))
+            {
+                return false;
+            }
+
+            constructed = type;
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+
+
+    private static Type[] BuildGenericArgumentTypes()
+    {
+        List<Type> types = [];
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            if (assembly.IsDynamic)
+                continue;
+
+            try
+            {
+                types.AddRange(assembly.GetExportedTypes().Where(IsGenericArgumentCandidate));
+            }
+            catch (Exception ex)
+            {
+                CherryPick.Warn($"Failed to inspect exported types from {assembly.FullName}: {ex}");
+            }
+        }
+
+        return [.. types.Distinct()];
+    }
+
+
+
+    private static bool IsGenericArgumentCandidate(Type type)
+    {
+        if (type.ContainsGenericParameters || type.IsGenericParameter || type.IsGenericTypeDefinition)
+            return false;
+
+        return type.IsDataModelType() ||
+            typeof(IWorldElement).IsAssignableFrom(type) ||
+            typeof(IWorker).IsAssignableFrom(type) ||
+            typeof(IAsset).IsAssignableFrom(type);
+    }
+
+
+
+    private static int GetGenericArgumentMatchRank(Type type, string query)
+    {
+        string niceName = type.GetNiceName();
+        string name = type.Name;
+        string? fullName = type.FullName;
+
+        if (Matches(niceName, query, StringComparison.OrdinalIgnoreCase) ||
+            Matches(name, query, StringComparison.OrdinalIgnoreCase) ||
+            (fullName is not null && Matches(fullName, query, StringComparison.OrdinalIgnoreCase)))
+        {
+            return 0;
+        }
+
+        if (StartsWith(niceName, query) || StartsWith(name, query) || (fullName is not null && StartsWith(fullName, query)))
+            return 1;
+
+        if (Contains(niceName, query) || Contains(name, query) || (fullName is not null && Contains(fullName, query)))
+            return 2;
+
+        return -1;
+    }
+
+
+
+    private static bool Matches(string value, string query, StringComparison comparison) => value.Equals(query, comparison);
+    private static bool StartsWith(string value, string query) => value.StartsWith(query, StringComparison.OrdinalIgnoreCase);
+    private static bool Contains(string value, string query) => value.Contains(query, StringComparison.OrdinalIgnoreCase);
 
 
 
@@ -403,4 +567,3 @@ public readonly struct MatchRatioComparer : IComparer<float>
         return x > y ? -1 : 1;
     }
 }
-
