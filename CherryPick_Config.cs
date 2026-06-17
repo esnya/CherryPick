@@ -31,4 +31,7 @@ public partial class CherryPick : ResoniteMod
 
     [AutoRegisterConfigKey]
     public static ModConfigurationKey<bool> RegisterWithHotReloadLibs = new("Register with HotReloadLibs", "When checked and CherryPick is built with HotReloadLibs support, registers CherryPick for hot reload", () => true);
+
+    [AutoRegisterConfigKey]
+    public static ModConfigurationKey<bool> NonPersistentSearchWindows = new("Make Search Windows Non-Persistent", "When checked, search window slots will be spawned with Persistent set to false", () => false);
 }
