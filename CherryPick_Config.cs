@@ -21,6 +21,9 @@ public partial class CherryPick : ResoniteMod
     public static ModConfigurationKey<int> ResultCount = new("Result count", $"How many results to show when searching (clamped to {MAX_RESULT_COUNT})", () => 10);
 
     [AutoRegisterConfigKey]
+    public static ModConfigurationKey<int> RecentComponentCount = new("Recent component count", $"How many recently added concrete components to show above the search results (clamped to {MAX_RESULT_COUNT})", () => 5);
+
+    [AutoRegisterConfigKey]
     public static ModConfigurationKey<bool> ClearFocus = new("Clear focus", "When checked, the search buttons will clear the focus of the search bar.", () => true);
 
     [AutoRegisterConfigKey]
