@@ -9,6 +9,9 @@ namespace CherryPick;
 public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot componentUIRoot, ButtonEventHandler<string> onGenericPressed, ButtonEventHandler<string> onAddPressed, UIBuilder searchBuilder, Sync<string> scope)
 {
     private static readonly string PROTOFLUX_PREFIX = "/ProtoFlux/Runtimes/";
+    private const long CONCRETE_GENERIC_ORDER_START = -4096;
+    private const long RECENT_COMPONENT_ORDER_START = -3072;
+    private static readonly colorX RecentComponentColor = RadiantUI_Constants.Sub.PURPLE;
     public string Scope
     {
         get => scope.Value;
@@ -18,6 +21,7 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
     public static WorkerDetails[] Workers => _allWorkers;
     private readonly SortedList<float, WorkerDetails> _results = new(new MatchRatioComparer()); // Not queryable by index due to the implementation of MatchRatioComparer
     private static readonly WorkerDetails[] _allWorkers = [];
+    private static readonly List<WorkerDetails> _recentComponents = [];
     private static readonly Lazy<Type[]> _genericArgumentTypes = new(BuildGenericArgumentTypes);
     private static readonly (string Name, Type Type)[] _knownGenericArgumentAliases =
     [
@@ -251,39 +255,16 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
         PerformMatch(matchTxt, resultCount, showProtofluxComponents);
 
-        try
-        {
-            searchRoot.FindChild(s => s.OrderOffset == -1024)?.Destroy();
-            WorkerDetails firstGeneric = _results.Values.First(w => w.Type.IsGenericTypeDefinition); // Bails the try/catch if it fails
+        ClearPinnedResults();
 
-            if (!string.IsNullOrEmpty(genericType))
-            {
-                Type? genParam = ResolveGenericArgument(genericType);
-                if (genParam is null)
-                    goto PARSE_TYPES;
+        HashSet<Type> pinnedTypes = BuildRecentComponentResults(editor);
 
-                if (!TryConstructGeneric(firstGeneric.Type, genParam, out Type? constructed) || constructed is null)
-                    goto PARSE_TYPES;
-
-                try
-                {
-                    WorkerDetails detail = new(constructed.GetNiceName(), firstGeneric.Path, constructed);
-                    Button typeButton = CreateConcreteComponentButton(detail, editor, RadiantUI_Constants.Sub.ORANGE);
-                    typeButton.Slot.OrderOffset = -1024;
-                }
-                catch (ArgumentException)
-                {
-                    CherryPick.Warn($"Tried to encode a non-data model type: {constructed}");
-                }
-            }
-        }
-        catch (InvalidOperationException) { } // Swallow this exception in particular because First() will throw if nothing satisfies the lambda condition
-
-        PARSE_TYPES:
+        if (!string.IsNullOrEmpty(genericType))
+            BuildConcreteGenericResults(genericType, editor, pinnedTypes);
 
         for (int i = 0; i < searchRoot.ChildrenCount; i++)
         {
-            if (searchRoot[i].OrderOffset == -1024)
+            if (IsPinnedResult(searchRoot[i].OrderOffset))
                 continue;
 
             if (!_results.Any(r => r.Value.Name == searchRoot[i].Name))
@@ -299,7 +280,7 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
             bool isGenType = result.Type.IsGenericTypeDefinition;
             string arg = "";
 
-            Slot? existingMatch = searchRoot.FindChild(s => s.Name == result.Name);
+            Slot? existingMatch = searchRoot.FindChild(s => s.Name == result.Name && !IsPinnedResult(s.OrderOffset));
             if (existingMatch is not null)
             {
                 existingMatch.OrderOffset = j++;
@@ -311,7 +292,8 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
             {
                 arg = isGenType ? Path.Combine(result.Path, result.Type.AssemblyQualifiedName) : searchRoot.World.Types().EncodeType(result.Type);
                 var pressed = isGenType ? onGenericPressed : onAddPressed;
-                buttonSlot = CreateButton(result, pressed, arg, searchBuilder, editor, RadiantUI_Constants.Sub.CYAN).Slot;
+                Action? localPressed = isGenType ? null : () => RememberRecentComponent(result);
+                buttonSlot = CreateButton(result, pressed, arg, searchBuilder, editor, RadiantUI_Constants.Sub.CYAN, localPressed).Slot;
             }
             catch (ArgumentException)
             {
@@ -327,7 +309,80 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
 
 
-    #region Generic argument matching
+    #region Generic concrete results
+
+
+
+    private void ClearPinnedResults()
+    {
+        for (int i = searchRoot.ChildrenCount - 1; i >= 0; i--)
+        {
+            if (IsPinnedResult(searchRoot[i].OrderOffset))
+            {
+                searchRoot[i].ActiveSelf = false;
+                searchRoot.World.RunInUpdates(1, searchRoot[i].Destroy);
+            }
+        }
+    }
+
+
+
+    private static bool IsPinnedResult(long orderOffset) => orderOffset >= CONCRETE_GENERIC_ORDER_START && orderOffset < 0;
+
+
+
+    private HashSet<Type> BuildRecentComponentResults(TextEditor editor)
+    {
+        HashSet<Type> displayedTypes = [];
+        int recentCount = Math.Clamp(Config!.GetValue(RecentComponentCount), 0, MAX_RESULT_COUNT);
+        if (recentCount <= 0)
+            return displayedTypes;
+
+        WorkerDetails[] recentComponents;
+        lock (_recentComponents)
+            recentComponents = [.. _recentComponents.Take(recentCount)];
+
+        for (int i = 0; i < recentComponents.Length; i++)
+        {
+            WorkerDetails detail = recentComponents[i];
+            if (detail.Type is null || detail.Type.IsGenericTypeDefinition || !displayedTypes.Add(detail.Type))
+                continue;
+
+            Button typeButton = CreateConcreteComponentButton(detail, editor, RecentComponentColor);
+            typeButton.Slot.OrderOffset = RECENT_COMPONENT_ORDER_START + i;
+        }
+
+        return displayedTypes;
+    }
+
+
+
+    private void BuildConcreteGenericResults(string genericType, TextEditor editor, HashSet<Type> pinnedTypes)
+    {
+        Type? genParam = ResolveGenericArgument(genericType);
+        if (genParam is null)
+            return;
+
+        foreach (var result in _results.Values)
+        {
+            if (result.Type is null ||
+                !result.Type.IsGenericTypeDefinition ||
+                result.Type.GetGenericArguments().Length != 1 ||
+                !TryConstructGeneric(result.Type, genParam, out Type? constructed) ||
+                constructed is null ||
+                pinnedTypes.Contains(constructed))
+            {
+                continue;
+            }
+
+            WorkerDetails detail = new(constructed.GetNiceName(), result.Path, constructed);
+            Button typeButton = CreateConcreteComponentButton(detail, editor, RadiantUI_Constants.Sub.ORANGE);
+            typeButton.Slot.OrderOffset = CONCRETE_GENERIC_ORDER_START;
+
+            pinnedTypes.Add(constructed);
+            break;
+        }
+    }
 
 
 
@@ -407,6 +462,24 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
 
 
+    private bool TryEncodeType(Type type, out string arg, bool warn = true)
+    {
+        arg = "";
+        try
+        {
+            arg = searchRoot.World.Types().EncodeType(type);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            if (warn)
+                CherryPick.Warn($"Tried to encode a non-data model type: {type}");
+            return false;
+        }
+    }
+
+
+
     private static Type[] BuildGenericArgumentTypes()
     {
         List<Type> types = [];
@@ -477,7 +550,7 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
 
 
-    #region Component selection
+    #region Component selection and history
 
 
 
@@ -485,7 +558,7 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
     {
         WorkerDetails capturedDetail = detail;
         if (TryEncodeType(capturedDetail.Type, out string arg, warn: false))
-            return CreateButton(capturedDetail, onAddPressed, arg, searchBuilder, editor, col);
+            return CreateButton(capturedDetail, onAddPressed, arg, searchBuilder, editor, col, () => RememberRecentComponent(capturedDetail));
 
         return CreateButton(
             capturedDetail,
@@ -496,25 +569,25 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
             col,
             () =>
             {
+                RememberRecentComponent(capturedDetail);
                 selector.ComponentSelected.Target?.Invoke(selector, capturedDetail.Type);
             });
     }
 
 
 
-    private bool TryEncodeType(Type type, out string arg, bool warn = true)
+    private static void RememberRecentComponent(WorkerDetails detail)
     {
-        arg = "";
-        try
+        if (detail.Type is null || detail.Type.IsGenericTypeDefinition)
+            return;
+
+        lock (_recentComponents)
         {
-            arg = searchRoot.World.Types().EncodeType(type);
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            if (warn)
-                CherryPick.Warn($"Tried to encode a non-data model type: {type}");
-            return false;
+            _recentComponents.RemoveAll(recent => recent.Type == detail.Type);
+            _recentComponents.Insert(0, detail);
+
+            if (_recentComponents.Count > MAX_RESULT_COUNT)
+                _recentComponents.RemoveRange(MAX_RESULT_COUNT, _recentComponents.Count - MAX_RESULT_COUNT);
         }
     }
 
