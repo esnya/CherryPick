@@ -6,7 +6,7 @@ using static CherryPick.CherryPick;
 
 namespace CherryPick;
 
-public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHandler<string> onGenericPressed, ButtonEventHandler<string> onAddPressed, UIBuilder searchBuilder, Sync<string> scope)
+public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot componentUIRoot, ButtonEventHandler<string> onGenericPressed, ButtonEventHandler<string> onAddPressed, UIBuilder searchBuilder, Sync<string> scope)
 {
     private static readonly string PROTOFLUX_PREFIX = "/ProtoFlux/Runtimes/";
     public string Scope
@@ -267,9 +267,8 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
 
                 try
                 {
-                    string arg = searchRoot.World.Types().EncodeType(constructed);
                     WorkerDetails detail = new(constructed.GetNiceName(), firstGeneric.Path, constructed);
-                    Button typeButton = CreateButton(detail, onAddPressed, arg, searchBuilder, editor, RadiantUI_Constants.Sub.ORANGE);
+                    Button typeButton = CreateConcreteComponentButton(detail, editor, RadiantUI_Constants.Sub.ORANGE);
                     typeButton.Slot.OrderOffset = -1024;
                 }
                 catch (ArgumentException)
@@ -478,15 +477,64 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
 
 
 
+    #region Component selection
+
+
+
+    private Button CreateConcreteComponentButton(in WorkerDetails detail, TextEditor editor, colorX col)
+    {
+        WorkerDetails capturedDetail = detail;
+        if (TryEncodeType(capturedDetail.Type, out string arg, warn: false))
+            return CreateButton(capturedDetail, onAddPressed, arg, searchBuilder, editor, col);
+
+        return CreateButton(
+            capturedDetail,
+            null,
+            "",
+            searchBuilder,
+            editor,
+            col,
+            () =>
+            {
+                selector.ComponentSelected.Target?.Invoke(selector, capturedDetail.Type);
+            });
+    }
+
+
+
+    private bool TryEncodeType(Type type, out string arg, bool warn = true)
+    {
+        arg = "";
+        try
+        {
+            arg = searchRoot.World.Types().EncodeType(type);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            if (warn)
+                CherryPick.Warn($"Tried to encode a non-data model type: {type}");
+            return false;
+        }
+    }
+
+
+
+    #endregion
+
+
+
     // One day we will have better UI construction... one day :')
-    private Button CreateButton(in WorkerDetails detail, ButtonEventHandler<string> pressed, string arg, UIBuilder builder, TextEditor editor, colorX col)
+    private Button CreateButton(in WorkerDetails detail, ButtonEventHandler<string>? pressed, string arg, UIBuilder builder, TextEditor editor, colorX col, Action? localPressed = null)
     {
         // Snip the scope off of the beginning of the path if the browser so that it's relative to the scope
         string path = Scope != null ? detail.Path.Replace("/" + Scope, null) : detail.Path;
         string buttonText = $"<noparse={detail.Name.Length}>{detail.Name}<br><size=61.803%><line-height=133%>{path}";
 
 
-        var button = builder.Button(buttonText, col, pressed, arg, PressDelay);
+        var button = pressed is null
+            ? builder.Button(buttonText, col)
+            : builder.Button(buttonText, col, pressed, arg, PressDelay);
         ValueField<ulong> pressProxy = button.Slot.AddSlot("PressProxy").AttachComponent<ValueField<ulong>>();
         ButtonValueShift<ulong> proxyShifter = button.Slot.AttachComponent<ButtonValueShift<ulong>>();
         button.Slot.Name = detail.Name;
@@ -497,7 +545,8 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
         ValueField<double> lastPressed = button.Slot.AddSlot("LastPressed").AttachComponent<ValueField<double>>();
         button.ClearFocusOnPress.Value = Config!.GetValue(CherryPick.ClearFocus);
 
-        if (detail.Type.IsGenericTypeDefinition)
+        bool isGenericTypeDefinition = detail.Type.IsGenericTypeDefinition;
+        if (isGenericTypeDefinition || localPressed is not null)
         {
             // Define delegate here for unsubscription later
             void CherryPickButtonPress(IChangeable c)
@@ -507,8 +556,13 @@ public class CherryPicker(Slot searchRoot, Slot componentUIRoot, ButtonEventHand
 
                 if (now - lastPressed.Value < CherryPick.PressDelay || CherryPick.SingleClick)
                 {
-                    ClosePickerView();
-                    ClearSearch(editor);
+                    localPressed?.Invoke();
+
+                    if (isGenericTypeDefinition)
+                    {
+                        ClosePickerView();
+                        ClearSearch(editor);
+                    }
                 }
                 else
                     lastPressed.Value.Value = now;

@@ -105,7 +105,7 @@ public static class ComponentSelector_Patcher
 
 
         UIBuilder searchBuilder = new(searchRoot);
-        CherryPicker picker = new(searchRoot, ____uiRoot, onGenericPressed, onAddPressed, searchBuilder, ____rootPath);
+        CherryPicker picker = new(__instance, searchRoot, ____uiRoot, onGenericPressed, onAddPressed, searchBuilder, ____rootPath);
 
 
         RadiantUI_Constants.SetupEditorStyle(searchBuilder);
