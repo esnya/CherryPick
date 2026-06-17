@@ -15,6 +15,9 @@
     <Copyright>Copyright (c) 2026 Riley Fields</Copyright>
 
     <ReleaseBuild>./ReleaseBuild/</ReleaseBuild>
+    <UseHotReloadLibs Condition="'$(UseHotReloadLibs)'==''">false</UseHotReloadLibs>
+    <CopyToMods Condition="'$(CopyToMods)'==''">true</CopyToMods>
+    <DefineConstants Condition="'$(UseHotReloadLibs)'=='true'">$(DefineConstants);CHERRYPICK_HOTRELOAD</DefineConstants>
   </PropertyGroup>
 
   <!--This will test for the default Steam installation paths for Resonite on Windows and Linux.-->
@@ -26,7 +29,8 @@
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(DestinationFolder)'==''">
-    <DestinationFolder Condition="Exists($(ResonitePath))">$(ResonitePath)rml_mods</DestinationFolder>
+    <DestinationFolder Condition="'$(UseHotReloadLibs)'!='true' and Exists($(ResonitePath))">$(ResonitePath)rml_mods</DestinationFolder>
+    <DestinationFolder Condition="'$(UseHotReloadLibs)'=='true' and Exists($(ResonitePath))">$(ResonitePath)rml_mods\HotReloadMods</DestinationFolder>
   </PropertyGroup>
 
   <ItemGroup>
@@ -47,10 +51,16 @@
     <Reference Include="Elements.Assets">
       <HintPath>$(ResonitePath)Elements.Assets.dll</HintPath>
     </Reference>
+    <Reference Include="ResoniteHotReloadLib" Condition="'$(UseHotReloadLibs)'=='true'">
+      <HintPath>$(ResonitePath)rml_libs\ResoniteHotReloadLib.dll</HintPath>
+    </Reference>
+    <Reference Include="ResoniteHotReloadLibCore" Condition="'$(UseHotReloadLibs)'=='true'">
+      <HintPath>$(ResonitePath)rml_libs\ResoniteHotReloadLibCore.dll</HintPath>
+    </Reference>
   </ItemGroup>
 
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Copy SourceFiles="$(OutDir)$(TargetFileName)" DestinationFolder="$(ResonitePath)rml_mods" />
+  <Target Name="PostBuild" AfterTargets="PostBuildEvent" Condition="'$(CopyToMods)'=='true'">
+    <Copy SourceFiles="$(OutDir)$(TargetFileName)" DestinationFolder="$(DestinationFolder)" />
   </Target>
 
 

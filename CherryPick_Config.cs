@@ -28,4 +28,7 @@ public partial class CherryPick : ResoniteMod
 
     [AutoRegisterConfigKey]
     public static ModConfigurationKey<bool> ShowProtofluxInComponentSearch = new("Show Protoflux in Component Search", "When checked, Protoflux components will be shown in the component search results", () => false);
+
+    [AutoRegisterConfigKey]
+    public static ModConfigurationKey<bool> RegisterWithHotReloadLibs = new("Register with HotReloadLibs", "When checked and CherryPick is built with HotReloadLibs support, registers CherryPick for hot reload", () => true);
 }
