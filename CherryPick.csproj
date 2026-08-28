@@ -16,16 +16,18 @@
 
     <ReleaseBuild>./ReleaseBuild/</ReleaseBuild>
     <UseHotReloadLibs Condition="'$(UseHotReloadLibs)'==''">false</UseHotReloadLibs>
-    <CopyToMods Condition="'$(CopyToMods)'==''">true</CopyToMods>
+    <CopyToMods Condition="'$(CopyToMods)'==''">false</CopyToMods>
     <DefineConstants Condition="'$(UseHotReloadLibs)'=='true'">$(DefineConstants);CHERRYPICK_HOTRELOAD</DefineConstants>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
   </PropertyGroup>
 
   <!--This will test for the default Steam installation paths for Resonite on Windows and Linux.-->
   <PropertyGroup Condition="'$(ResonitePath)'==''">
     <ResonitePath Condition="'$(OS)' == 'Windows_NT' and Exists('C:\Program Files (x86)\Steam\steamapps\common\Resonite\')">C:\Program Files (x86)\Steam\steamapps\common\Resonite\</ResonitePath> 
     <ResonitePath Condition="'$(OS)' != 'Windows_NT' and Exists('$(HOME)/.local/share/Steam/steamapps/common/Resonite/')">$(HOME)/.local/share/Steam/steamapps/common/Resonite/</ResonitePath>
-    <!--If neither path above exists, you can define your custom Resonite install directory here -->
-    <ResonitePath Condition="'$(ResonitePath)'==''">/Custom/Resonite/Install/Path</ResonitePath>
+    <ResonitePath Condition="'$(ResonitePath)'==''">$(MSBuildProjectDirectory)/Resonite/</ResonitePath>
+    <FrooxEnginePresent Condition="Exists('$(ResonitePath)FrooxEngine.dll')">true</FrooxEnginePresent>
+    <FrooxEnginePresent Condition="'$(FrooxEnginePresent)'==''">false</FrooxEnginePresent>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(DestinationFolder)'==''">
@@ -33,7 +35,7 @@
     <DestinationFolder Condition="'$(UseHotReloadLibs)'=='true' and Exists($(ResonitePath))">$(ResonitePath)rml_mods\HotReloadMods</DestinationFolder>
   </PropertyGroup>
 
-  <ItemGroup>
+  <ItemGroup Condition="'$(FrooxEnginePresent)'=='true'">
     <Reference Include="ResoniteModLoader">
       <HintPath>$(ResonitePath)Libraries\ResoniteModLoader.dll</HintPath>
     </Reference>
@@ -56,6 +58,30 @@
     </Reference>
     <Reference Include="ResoniteHotReloadLibCore" Condition="'$(UseHotReloadLibs)'=='true'">
       <HintPath>$(ResonitePath)rml_libs\ResoniteHotReloadLibCore.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(FrooxEnginePresent)'!='true'">
+    <PackageReference Include="Resonite.GameLibs" Version="2026.8.27.1094" GeneratePathProperty="true" ExcludeAssets="all" PrivateAssets="all" />
+    <Reference Include="ResoniteModLoader">
+      <HintPath>$(MSBuildProjectDirectory)/Resonite/ResoniteModLoader.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="HarmonyLib">
+      <HintPath>$(MSBuildProjectDirectory)/Resonite/0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="FrooxEngine">
+      <HintPath>$(PkgResonite_GameLibs)/ref/net10.0/FrooxEngine.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Elements.Core">
+      <HintPath>$(PkgResonite_GameLibs)/ref/net10.0/Elements.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Elements.Assets">
+      <HintPath>$(PkgResonite_GameLibs)/ref/net10.0/Elements.Assets.dll</HintPath>
+      <Private>false</Private>
     </Reference>
   </ItemGroup>
 
