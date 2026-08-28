@@ -21,7 +21,11 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
     public static WorkerDetails[] Workers => _allWorkers;
     private readonly SortedList<float, WorkerDetails> _results = new(new MatchRatioComparer()); // Not queryable by index due to the implementation of MatchRatioComparer
     private static readonly WorkerDetails[] _allWorkers = [];
-    private static readonly List<WorkerDetails> _recentComponents = [];
+    private static readonly Dictionary<RecentComponentScope, List<WorkerDetails>> _recentComponents = new()
+    {
+        [RecentComponentScope.Components] = [],
+        [RecentComponentScope.Flux] = []
+    };
     private static readonly Lazy<Type[]> _genericArgumentTypes = new(BuildGenericArgumentTypes);
     private static readonly (string Name, Type Type)[] _knownGenericArgumentAliases =
     [
@@ -338,9 +342,10 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
         if (recentCount <= 0)
             return displayedTypes;
 
+        RecentComponentScope recentScope = GetRecentComponentScope();
         WorkerDetails[] recentComponents;
         lock (_recentComponents)
-            recentComponents = [.. _recentComponents.Take(recentCount)];
+            recentComponents = [.. _recentComponents[recentScope].Take(recentCount)];
 
         for (int i = 0; i < recentComponents.Length; i++)
         {
@@ -576,19 +581,30 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
 
 
-    private static void RememberRecentComponent(WorkerDetails detail)
+    private void RememberRecentComponent(WorkerDetails detail)
     {
         if (detail.Type is null || detail.Type.IsGenericTypeDefinition)
             return;
 
+        RecentComponentScope recentScope = GetRecentComponentScope();
         lock (_recentComponents)
         {
-            _recentComponents.RemoveAll(recent => recent.Type == detail.Type);
-            _recentComponents.Insert(0, detail);
+            List<WorkerDetails> recentComponents = _recentComponents[recentScope];
+            recentComponents.RemoveAll(recent => recent.Type == detail.Type);
+            recentComponents.Insert(0, detail);
 
-            if (_recentComponents.Count > MAX_RESULT_COUNT)
-                _recentComponents.RemoveRange(MAX_RESULT_COUNT, _recentComponents.Count - MAX_RESULT_COUNT);
+            if (recentComponents.Count > MAX_RESULT_COUNT)
+                recentComponents.RemoveRange(MAX_RESULT_COUNT, recentComponents.Count - MAX_RESULT_COUNT);
         }
+    }
+
+
+
+    private RecentComponentScope GetRecentComponentScope()
+    {
+        return selector.ComponentFilter.Target is null && selector.GenericArgumentPrefiller.Target is null
+            ? RecentComponentScope.Components
+            : RecentComponentScope.Flux;
     }
 
 
@@ -682,6 +698,14 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
         return button;
     }
+}
+
+
+
+internal enum RecentComponentScope
+{
+    Components,
+    Flux
 }
 
 

@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - master
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_SKIP_FIRST_TIME_EXPERIENCE: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Prepare ResoniteModLoader references
+        shell: bash
+        run: |
+          mkdir -p Resonite
+          curl -sSfL -o Resonite/ResoniteModLoader.dll https://github.com/resonite-modding-group/ResoniteModLoader/releases/latest/download/ResoniteModLoader.dll
+          curl -sSfL -o Resonite/0Harmony.dll https://github.com/resonite-modding-group/ResoniteModLoader/releases/latest/download/0Harmony.dll
+
+      - name: Restore
+        run: dotnet restore ./CherryPick.slnx --locked-mode
+
+      - name: Build
+        run: dotnet build ./CherryPick.slnx -c Release --no-restore -p:CopyToMods=false
+
+      - name: Stage release artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          cp ./bin/Release/net10.0/CherryPick.dll ./artifacts/
+
+      - name: Upload release artifact
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: actions/upload-artifact@v7
+        with:
+          name: CherryPick
+          path: artifacts/CherryPick.dll
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Download release artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: CherryPick
+          path: artifacts
+
+      - name: Create GitHub Release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" ./artifacts/CherryPick.dll --repo "${{ github.repository }}" --verify-tag --generate-notes
