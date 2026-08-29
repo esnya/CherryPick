@@ -14,7 +14,15 @@ Recent choices are shown before fuzzy matches. Component and ProtoFlux choices a
 
 <img src="Resonite_pm9oFaDfHo.gif" width="250">
 
-CherryPick also supports generic typing as well! You can insert generic arguments for the first generic type in the list like so:
+CherryPick also supports concrete generic typing. Add one or more type arguments to a node name, including nested collection types:
+
+```text
+ValueInput<string>
+GetAtObject<IList<string>,string>
+GetObjectWithObjectKey<IDictionary<string,Uri>,string,Uri>
+```
+
+Collection nodes also support a shorthand that infers their leading collection interface from the remaining type arguments. For example, `GetAtObject<string>` resolves to `GetAtObject<IList<string>,string>`.
 
 <img src="Resonite_v4HSr3GShH.gif" width=350>
 

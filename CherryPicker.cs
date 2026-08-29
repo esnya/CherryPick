@@ -1,7 +1,6 @@
 using FrooxEngine;
 using Elements.Core;
 using FrooxEngine.UIX;
-using System.Reflection;
 using static CherryPick.CherryPick;
 
 namespace CherryPick;
@@ -26,28 +25,6 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
         [RecentComponentScope.Components] = [],
         [RecentComponentScope.Flux] = []
     };
-    private static readonly Lazy<Type[]> _genericArgumentTypes = new(BuildGenericArgumentTypes);
-    private static readonly (string Name, Type Type)[] _knownGenericArgumentAliases =
-    [
-        ("bool", typeof(bool)),
-        ("byte", typeof(byte)),
-        ("sbyte", typeof(sbyte)),
-        ("short", typeof(short)),
-        ("ushort", typeof(ushort)),
-        ("int", typeof(int)),
-        ("uint", typeof(uint)),
-        ("long", typeof(long)),
-        ("ulong", typeof(ulong)),
-        ("float", typeof(float)),
-        ("double", typeof(double)),
-        ("decimal", typeof(decimal)),
-        ("char", typeof(char)),
-        ("string", typeof(string)),
-        ("Uri", typeof(Uri))
-    ];
-
-
-
     static CherryPicker()
     {
         static IEnumerable<CategoryNode<Type>> flatten(IEnumerable<CategoryNode<Type>> categories) =>
@@ -227,24 +204,7 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
         OpenPickerView();
 
 
-        int genericStart = txt.IndexOf('<');
-        int genericEnd = txt.LastIndexOf('>');
-        string? matchTxt = null;
-        string? genericType = null;
-
-        if (genericStart > 0)
-        {
-            matchTxt = txt.Substring(0, genericStart);
-
-            if (genericEnd > genericStart)
-                genericType = txt.Substring(genericStart + 1, genericEnd - genericStart - 1);
-            else if (genericStart < txt.Length - 1)
-                genericType = txt.Substring(genericStart + 1);
-        }
-        else
-        {
-            matchTxt = txt;
-        }
+        IReadOnlyList<string>? genericArguments = GenericSearch.ParseGenericQuery(txt, out string matchTxt);
 
 
         // searchRoot.DestroyChildren();
@@ -263,8 +223,8 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
         HashSet<Type> pinnedTypes = BuildRecentComponentResults(editor);
 
-        if (!string.IsNullOrEmpty(genericType))
-            BuildConcreteGenericResults(genericType, editor, pinnedTypes);
+        if (genericArguments is not null)
+            BuildConcreteGenericResults(genericArguments, editor, pinnedTypes);
 
         for (int i = 0; i < searchRoot.ChildrenCount; i++)
         {
@@ -362,70 +322,66 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
 
 
 
-    private void BuildConcreteGenericResults(string genericType, TextEditor editor, HashSet<Type> pinnedTypes)
+    private void BuildConcreteGenericResults(IReadOnlyList<string> genericArguments, TextEditor editor, HashSet<Type> pinnedTypes)
     {
-        Type? genParam = ResolveGenericArgument(genericType);
-        if (genParam is null)
+        Type[] resolvedArguments = new Type[genericArguments.Count];
+        for (int i = 0; i < genericArguments.Count; i++)
+        {
+            Type? resolved = GenericSearch.ResolveGenericArgument(genericArguments[i], TryParseNiceType);
+            if (resolved is null)
+                return;
+            resolvedArguments[i] = resolved;
+        }
+
+        bool exactConstructionSucceeded = false;
+        foreach (WorkerDetails result in _results.Values)
+        {
+            Type? definition = result.Type;
+            if (definition is null ||
+                !definition.IsGenericTypeDefinition ||
+                definition.GetGenericArguments().Length != resolvedArguments.Length ||
+                !GenericTypeCatalog.TryConstructGeneric(definition, resolvedArguments, out Type? constructed) ||
+                constructed is null)
+            {
+                continue;
+            }
+
+            exactConstructionSucceeded = true;
+            if (pinnedTypes.Contains(constructed))
+                continue;
+
+            AddConcreteGenericResult(result, constructed, editor, pinnedTypes);
+            return;
+        }
+
+        if (exactConstructionSucceeded)
             return;
 
-        foreach (var result in _results.Values)
+        foreach (WorkerDetails result in _results.Values)
         {
-            if (result.Type is null ||
-                !result.Type.IsGenericTypeDefinition ||
-                result.Type.GetGenericArguments().Length != 1 ||
-                !TryConstructGeneric(result.Type, genParam, out Type? constructed) ||
+            Type? definition = result.Type;
+            if (definition is null ||
+                !definition.IsGenericTypeDefinition ||
+                !GenericSearch.TryInferLeadingCarrier(definition, resolvedArguments, out Type? constructed) ||
                 constructed is null ||
                 pinnedTypes.Contains(constructed))
             {
                 continue;
             }
 
-            WorkerDetails detail = new(constructed.GetNiceName(), result.Path, constructed);
-            Button typeButton = CreateConcreteComponentButton(detail, editor, RadiantUI_Constants.Sub.ORANGE);
-            typeButton.Slot.OrderOffset = CONCRETE_GENERIC_ORDER_START;
-
-            pinnedTypes.Add(constructed);
-            break;
+            AddConcreteGenericResult(result, constructed, editor, pinnedTypes);
+            return;
         }
     }
 
 
 
-    private Type? ResolveGenericArgument(string genericType)
+    private void AddConcreteGenericResult(WorkerDetails source, Type constructed, TextEditor editor, HashSet<Type> pinnedTypes)
     {
-        Type? exact = TryParseNiceType(genericType);
-        if (exact is not null)
-            return exact;
-
-        string trimmed = genericType.Trim();
-        if (string.IsNullOrEmpty(trimmed))
-            return null;
-
-        Type? aliasMatch = FindKnownGenericArgumentAlias(trimmed);
-        if (aliasMatch is not null)
-            return aliasMatch;
-
-        return _genericArgumentTypes.Value
-            .Select(t => new { Type = t, Rank = GetGenericArgumentMatchRank(t, trimmed) })
-            .Where(t => t.Rank >= 0)
-            .OrderBy(t => t.Rank)
-            .ThenBy(t => t.Type.GetNiceName().Length)
-            .ThenBy(t => t.Type.GetNiceName(), StringComparer.OrdinalIgnoreCase)
-            .Select(t => t.Type)
-            .FirstOrDefault();
-    }
-
-
-
-    private static Type? FindKnownGenericArgumentAlias(string query)
-    {
-        return _knownGenericArgumentAliases
-            .Where(alias => alias.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
-            .OrderBy(alias => alias.Name.Equals(query, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(alias => alias.Name.StartsWith(query, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(alias => alias.Name.Length)
-            .Select(alias => alias.Type)
-            .FirstOrDefault();
+        WorkerDetails detail = new(constructed.GetNiceName(), source.Path, constructed);
+        Button typeButton = CreateConcreteComponentButton(detail, editor, RadiantUI_Constants.Sub.ORANGE);
+        typeButton.Slot.OrderOffset = CONCRETE_GENERIC_ORDER_START;
+        pinnedTypes.Add(constructed);
     }
 
 
@@ -439,29 +395,6 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
         catch (Exception)
         {
             return null;
-        }
-    }
-
-
-
-    private static bool TryConstructGeneric(Type genericDefinition, Type genericArgument, out Type? constructed)
-    {
-        constructed = null;
-        try
-        {
-            Type type = genericDefinition.MakeGenericType(genericArgument);
-            if ((bool?)type.GetProperty("IsValidGenericType", BindingFlags.Static | BindingFlags.Public)?.GetValue(null) == false ||
-                !type.IsValidGenericType(validForInstantiation: true))
-            {
-                return false;
-            }
-
-            constructed = type;
-            return true;
-        }
-        catch (ArgumentException)
-        {
-            return false;
         }
     }
 
@@ -482,72 +415,6 @@ public class CherryPicker(ComponentSelector selector, Slot searchRoot, Slot comp
             return false;
         }
     }
-
-
-
-    private static Type[] BuildGenericArgumentTypes()
-    {
-        List<Type> types = [];
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
-        {
-            if (assembly.IsDynamic)
-                continue;
-
-            try
-            {
-                types.AddRange(assembly.GetExportedTypes().Where(IsGenericArgumentCandidate));
-            }
-            catch (Exception ex)
-            {
-                CherryPick.Warn($"Failed to inspect exported types from {assembly.FullName}: {ex}");
-            }
-        }
-
-        return [.. types.Distinct()];
-    }
-
-
-
-    private static bool IsGenericArgumentCandidate(Type type)
-    {
-        if (type.ContainsGenericParameters || type.IsGenericParameter || type.IsGenericTypeDefinition)
-            return false;
-
-        return type.IsDataModelType() ||
-            typeof(IWorldElement).IsAssignableFrom(type) ||
-            typeof(IWorker).IsAssignableFrom(type) ||
-            typeof(IAsset).IsAssignableFrom(type);
-    }
-
-
-
-    private static int GetGenericArgumentMatchRank(Type type, string query)
-    {
-        string niceName = type.GetNiceName();
-        string name = type.Name;
-        string? fullName = type.FullName;
-
-        if (Matches(niceName, query, StringComparison.OrdinalIgnoreCase) ||
-            Matches(name, query, StringComparison.OrdinalIgnoreCase) ||
-            (fullName is not null && Matches(fullName, query, StringComparison.OrdinalIgnoreCase)))
-        {
-            return 0;
-        }
-
-        if (StartsWith(niceName, query) || StartsWith(name, query) || (fullName is not null && StartsWith(fullName, query)))
-            return 1;
-
-        if (Contains(niceName, query) || Contains(name, query) || (fullName is not null && Contains(fullName, query)))
-            return 2;
-
-        return -1;
-    }
-
-
-
-    private static bool Matches(string value, string query, StringComparison comparison) => value.Equals(query, comparison);
-    private static bool StartsWith(string value, string query) => value.StartsWith(query, StringComparison.OrdinalIgnoreCase);
-    private static bool Contains(string value, string query) => value.Contains(query, StringComparison.OrdinalIgnoreCase);
 
 
 
