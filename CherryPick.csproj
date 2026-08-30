@@ -53,6 +53,9 @@
     <Reference Include="Elements.Assets">
       <HintPath>$(ResonitePath)Elements.Assets.dll</HintPath>
     </Reference>
+    <Reference Include="Renderite.Shared">
+      <HintPath>$(ResonitePath)Renderite.Shared.dll</HintPath>
+    </Reference>
     <Reference Include="ResoniteHotReloadLib" Condition="'$(UseHotReloadLibs)'=='true'">
       <HintPath>$(ResonitePath)rml_libs\ResoniteHotReloadLib.dll</HintPath>
     </Reference>
@@ -81,6 +84,10 @@
     </Reference>
     <Reference Include="Elements.Assets">
       <HintPath>$(PkgResonite_GameLibs)/ref/net10.0/Elements.Assets.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Renderite.Shared">
+      <HintPath>$(PkgResonite_GameLibs)/ref/net10.0/Renderite.Shared.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

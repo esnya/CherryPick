@@ -8,6 +8,8 @@ using FrooxEngine;
 
 using HarmonyLib;
 
+using Renderite.Shared;
+
 namespace CherryPick;
 
 
@@ -33,6 +35,14 @@ internal static class GenericTypeCatalog
         "ReadOnlyForEachWithIndexValue"
     ];
 
+    private static readonly HashSet<string> _dictionaryPairNodeNames =
+    [
+        "UnpackObjectKeyObjectValuePair",
+        "UnpackObjectKeyValueValuePair",
+        "UnpackValueKeyObjectValuePair",
+        "UnpackValueKeyValueValuePair"
+    ];
+
     private static readonly HashSet<string> _singleArgumentAppendTargets =
     [
         ProtoFluxNodeNamespacePrefix + ".ObjectRelay`1",
@@ -54,19 +64,45 @@ internal static class GenericTypeCatalog
         typeof(IDictionary<,>)
     ];
 
+    // Value collection nodes carry an unmanaged constraint, so they need a
+    // dedicated set instead of falling back to the broader object catalog.
+    private static readonly Type[] _unmanagedSeedTypes =
+    [
+        typeof(dummy),
+        typeof(DummyEnum),
+        typeof(Guid),
+        typeof(bool),
+        typeof(int),
+        typeof(float),
+        typeof(float2),
+        typeof(float3),
+        typeof(float4),
+        typeof(floatQ),
+        typeof(color),
+        typeof(colorX),
+        typeof(BodyNode)
+    ];
+
+    // Observed heterogeneous Data Model dictionaries. Keep this explicit rather
+    // than projecting the full SeedTypes x SeedTypes cross product.
+    private static readonly (Type Key, Type Value)[] _dictionaryProfiles =
+    [
+        (typeof(BodyNode), typeof(Slot)),
+        (typeof(string), typeof(IWorldElement)),
+        (typeof(string), typeof(PermissionSet))
+    ];
+
     private static readonly Lazy<IReadOnlyList<Type>> _seedTypes = new(BuildSeedTypes);
     private static readonly Lazy<IReadOnlyList<Type>> _candidateTypes = new(BuildCandidateTypes);
     private static readonly Lazy<IReadOnlyList<Type>> _openInterfaceDefinitions = new(BuildOpenInterfaceDefinitions);
 
     /// <summary>
     /// The ordered scalar/object seed types used to project common generic candidates.
-    /// The current FrooxEngine surface produces eleven entries.
     /// </summary>
     internal static IReadOnlyList<Type> SeedTypes => _seedTypes.Value;
 
     /// <summary>
     /// The ordered seed, non-generic collection, and closed collection-interface catalog.
-    /// The current FrooxEngine surface produces seventy-nine entries.
     /// </summary>
     internal static IReadOnlyList<Type> CandidateTypes => _candidateTypes.Value;
 
@@ -227,7 +263,22 @@ internal static class GenericTypeCatalog
                 types.Add(providerType);
         }
 
-        return Array.AsReadOnly(types.ToArray());
+        types.AddRange(_unmanagedSeedTypes);
+        types.AddRange(
+        [
+            typeof(RaycastHit),
+            typeof(Slot),
+            typeof(User),
+            typeof(UserRef),
+            typeof(Component),
+            typeof(MeshRenderer),
+            typeof(Material),
+            typeof(IBounded),
+            typeof(IField<string>),
+            typeof(IField<colorX>)
+        ]);
+
+        return Array.AsReadOnly(types.Distinct().ToArray());
     }
 
 
@@ -244,6 +295,9 @@ internal static class GenericTypeCatalog
             types.Add(typeof(IReadOnlyList<>).MakeGenericType(seed));
             types.Add(typeof(IDictionary<,>).MakeGenericType(seed, seed));
         }
+
+        foreach ((Type key, Type value) in _dictionaryProfiles)
+            types.Add(typeof(IDictionary<,>).MakeGenericType(key, value));
 
         return Array.AsReadOnly(types.Distinct().ToArray());
     }
@@ -314,7 +368,7 @@ internal static class GenericTypeCatalog
 
         bool[] unmanaged = freeParameters.Select(HasUnmanagedConstraint).ToArray();
         IReadOnlyList<Type> representatives = unmanaged.All(value => value)
-            ? [typeof(dummy), typeof(DummyEnum), typeof(Guid)]
+            ? _unmanagedSeedTypes
             : SeedTypes;
 
         foreach (Type representative in representatives)
@@ -327,34 +381,104 @@ internal static class GenericTypeCatalog
                     unmanaged[i] && !IsUnmanaged(representative) ? typeof(dummy) : representative);
             }
 
-            Type[] arguments = new Type[parameters.Length];
-            bool complete = true;
+            TryAddProjectedCandidate(definition, parameters, carrierConstraints, substitutions, results, seen);
+        }
 
-            for (int i = 0; i < parameters.Length; i++)
+        if (TryGetDictionaryParameters(
+                definition,
+                freeParameters,
+                carrierConstraints,
+                out Type? keyParameter,
+                out Type? valueParameter))
+        {
+            foreach ((Type key, Type value) in _dictionaryProfiles)
             {
-                Type parameter = parameters[i];
-                if (substitutions.TryGetValue(parameter, out Type? argument))
+                Dictionary<Type, Type> substitutions = new()
                 {
-                    arguments[i] = argument;
-                    continue;
-                }
+                    [keyParameter] = key,
+                    [valueParameter] = value
+                };
 
-                if (!carrierConstraints.TryGetValue(parameter, out Type? carrierConstraint) ||
-                    !TrySubstituteType(carrierConstraint, substitutions, out argument))
-                {
-                    complete = false;
-                    break;
-                }
+                TryAddProjectedCandidate(definition, parameters, carrierConstraints, substitutions, results, seen);
+            }
+        }
+    }
 
+
+    private static bool TryGetDictionaryParameters(
+        Type definition,
+        IReadOnlyList<Type> freeParameters,
+        IReadOnlyDictionary<Type, Type> carrierConstraints,
+        [NotNullWhen(true)] out Type? keyParameter,
+        [NotNullWhen(true)] out Type? valueParameter)
+    {
+        keyParameter = null;
+        valueParameter = null;
+
+        if (freeParameters.Count != 2)
+            return false;
+
+        Type? dictionaryConstraint = carrierConstraints.Values.FirstOrDefault(constraint =>
+            constraint.IsGenericType &&
+            constraint.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+
+        if (dictionaryConstraint is null)
+        {
+            if (definition.Namespace != CollectionNodeNamespace ||
+                !_dictionaryPairNodeNames.Contains(GetUnadornedName(definition)))
+            {
+                return false;
+            }
+
+            keyParameter = freeParameters[0];
+            valueParameter = freeParameters[1];
+            return true;
+        }
+
+        Type[] arguments = dictionaryConstraint.GetGenericArguments();
+        if (arguments[0] == arguments[1] ||
+            !freeParameters.Contains(arguments[0]) ||
+            !freeParameters.Contains(arguments[1]))
+            return false;
+
+        keyParameter = arguments[0];
+        valueParameter = arguments[1];
+        return true;
+    }
+
+
+    private static void TryAddProjectedCandidate(
+        Type definition,
+        IReadOnlyList<Type> parameters,
+        IReadOnlyDictionary<Type, Type> carrierConstraints,
+        IReadOnlyDictionary<Type, Type> substitutions,
+        List<Type> results,
+        HashSet<Type> seen)
+    {
+        Type[] arguments = new Type[parameters.Count];
+
+        for (int i = 0; i < parameters.Count; i++)
+        {
+            Type parameter = parameters[i];
+            if (substitutions.TryGetValue(parameter, out Type? argument))
+            {
                 arguments[i] = argument;
+                continue;
             }
 
-            if (complete &&
-                TryConstructGeneric(definition, arguments, out Type? constructed) &&
-                seen.Add(constructed))
+            if (!carrierConstraints.TryGetValue(parameter, out Type? carrierConstraint) ||
+                !TrySubstituteType(carrierConstraint, substitutions, out argument))
             {
-                results.Add(constructed);
+                return;
             }
+
+            arguments[i] = argument;
+        }
+
+        if (TryConstructGeneric(definition, arguments, out Type? constructed) &&
+            seen.Add(constructed))
+        {
+            results.Add(constructed);
         }
     }
 
