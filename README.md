@@ -26,10 +26,17 @@ Collection nodes also support a shorthand that infers their leading collection i
 
 <img src="Resonite_v4HSr3GShH.gif" width=350>
 
+## Fork differences
+
+This maintained fork of [BlueCyro/CherryPick](https://github.com/BlueCyro/CherryPick) adds:
+
+- Separate recent-item lists for Components and ProtoFlux, shown before fuzzy matches.
+- Expanded generic search and candidate coverage: partial type names, multiple and nested arguments, broader reference/value/collection candidates, and collection-interface inference.
+- Optional non-persistent search windows.
+- Optional ResoniteHotReloadLib support for local development, plus CI-built DLLs attached to tagged releases.
+
 ## Installation
 
 1. Install [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader).
 2. Download [CherryPick.dll](https://github.com/esnya/CherryPick/releases/latest/download/CherryPick.dll) and place it in the `rml_mods` directory.
 3. Start Resonite.
-
-This maintained fork is based on [BlueCyro/CherryPick](https://github.com/BlueCyro/CherryPick).
