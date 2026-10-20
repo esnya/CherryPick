@@ -40,3 +40,7 @@ This maintained fork of [BlueCyro/CherryPick](https://github.com/BlueCyro/Cherry
 1. Install [ResoniteModLoader](https://github.com/resonite-modding-group/ResoniteModLoader).
 2. Download [CherryPick.dll](https://github.com/esnya/CherryPick/releases/latest/download/CherryPick.dll) and place it in the `rml_mods` directory.
 3. Start Resonite.
+
+## AI-assisted development notice
+
+Generative-AI coding agents were used in the development of esnya's modifications in this maintained fork. The project describes use of this maintained version as indirect use of generative AI. If applicable law or the terms or policies of a platform or service applicable to your use requires disclosure of that indirect use, provide the required disclosure as specified by those requirements. This notice does not redefine any external requirement or add restrictions to the MIT License.
